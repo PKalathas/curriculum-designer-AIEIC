@@ -70,6 +70,75 @@ async def _extract_pdf_text(file: UploadFile) -> str:
 
 # ── PDF export helpers ────────────────────────────────────────────────────────
 
+MARKDOWN_EXTENSIONS = ["fenced_code", "tables", "sane_lists", "nl2br"]
+
+PDF_EXPORT_CSS = """
+@page {
+  size: A4;
+  margin: 20mm 16mm;
+}
+body {
+  font-family: Helvetica, Arial, sans-serif;
+  font-size: 11pt;
+  color: #1f2328;
+  line-height: 1.55;
+}
+h1 {
+  font-size: 24pt;
+  margin: 0 0 10pt 0;
+  border-bottom: 1px solid #d0d7de;
+  padding-bottom: 6pt;
+}
+h2 {
+  font-size: 16pt;
+  margin: 18pt 0 8pt 0;
+}
+h3 {
+  font-size: 13pt;
+  margin: 14pt 0 6pt 0;
+}
+p {
+  margin: 0 0 8pt 0;
+}
+ul, ol {
+  margin: 0 0 8pt 18pt;
+}
+li {
+  margin: 0 0 4pt 0;
+}
+code {
+  font-family: Courier, monospace;
+  background: #f6f8fa;
+}
+pre {
+  font-family: Courier, monospace;
+  font-size: 10pt;
+  background: #f6f8fa;
+  border: 1px solid #d0d7de;
+  padding: 8pt;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 6pt 0 12pt 0;
+}
+th, td {
+  border: 1px solid #d0d7de;
+  padding: 6pt;
+  text-align: left;
+  vertical-align: top;
+}
+th {
+  background: #f6f8fa;
+}
+hr {
+  border: 0;
+  border-top: 1px solid #d0d7de;
+  margin: 12pt 0;
+}
+"""
+
+
 def _safe_filename_component(value: str) -> str:
     cleaned = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in value)
     return cleaned.strip("_") or "lab"
@@ -94,81 +163,14 @@ def _markdown_to_pdf_bytes(title: str, markdown_text: str) -> bytes:
             },
         ) from exc
 
-    body_html = md.markdown(
-        markdown_text,
-        extensions=["fenced_code", "tables", "sane_lists", "nl2br"],
-    )
+    body_html = md.markdown(markdown_text, extensions=MARKDOWN_EXTENSIONS)
     safe_title = html.escape(title)
     html_doc = f"""<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
     <title>{safe_title}</title>
-    <style>
-      @page {{
-        size: A4;
-        margin: 20mm 16mm;
-      }}
-      body {{
-        font-family: Helvetica, Arial, sans-serif;
-        font-size: 11pt;
-        color: #1f2328;
-        line-height: 1.55;
-      }}
-      h1 {{
-        font-size: 24pt;
-        margin: 0 0 10pt 0;
-        border-bottom: 1px solid #d0d7de;
-        padding-bottom: 6pt;
-      }}
-      h2 {{
-        font-size: 16pt;
-        margin: 18pt 0 8pt 0;
-      }}
-      h3 {{
-        font-size: 13pt;
-        margin: 14pt 0 6pt 0;
-      }}
-      p {{
-        margin: 0 0 8pt 0;
-      }}
-      ul, ol {{
-        margin: 0 0 8pt 18pt;
-      }}
-      li {{
-        margin: 0 0 4pt 0;
-      }}
-      code {{
-        font-family: Courier, monospace;
-        background: #f6f8fa;
-      }}
-      pre {{
-        font-family: Courier, monospace;
-        font-size: 10pt;
-        background: #f6f8fa;
-        border: 1px solid #d0d7de;
-        padding: 8pt;
-      }}
-      table {{
-        width: 100%;
-        border-collapse: collapse;
-        margin: 6pt 0 12pt 0;
-      }}
-      th, td {{
-        border: 1px solid #d0d7de;
-        padding: 6pt;
-        text-align: left;
-        vertical-align: top;
-      }}
-      th {{
-        background: #f6f8fa;
-      }}
-      hr {{
-        border: 0;
-        border-top: 1px solid #d0d7de;
-        margin: 12pt 0;
-      }}
-    </style>
+    <style>{PDF_EXPORT_CSS}</style>
   </head>
   <body>{body_html}</body>
 </html>
@@ -283,6 +285,34 @@ def _rubric_export_markdown(material: LabMaterial) -> str:
             ]
         )
     return "\n".join(lines)
+
+
+def _get_lab_or_404(request: Request, lab_id: str) -> LabMaterial:
+    material = request.app.state.store.get(lab_id)
+    if material is None:
+        raise _not_found(lab_id)
+    return material
+
+
+def _export_material_pdf(material: LabMaterial, kind: str) -> Response:
+    if kind == "lab":
+        title = f"Lab Spec - {material.title}"
+        markdown_text = _lab_export_markdown(material)
+    elif kind == "quiz":
+        title = f"Quiz - {material.title}"
+        markdown_text = _quiz_export_markdown(material)
+    elif kind == "rubric":
+        title = f"Rubric - {material.title}"
+        markdown_text = _rubric_export_markdown(material)
+    else:
+        raise ValueError(f"Unsupported export kind: {kind}")
+
+    return _pdf_download_response(
+        lab_id=material.lab_id,
+        kind=kind,
+        title=title,
+        markdown_text=markdown_text,
+    )
 
 
 # ── Graph invocation helper ───────────────────────────────────────────────────
@@ -458,47 +488,17 @@ async def get_lab(lab_id: str, request: Request) -> LabMaterial:
 
 @router.get("/{lab_id}/export/lab.pdf")
 async def export_lab_pdf(lab_id: str, request: Request) -> Response:
-    store = request.app.state.store
-    material = store.get(lab_id)
-    if material is None:
-        raise _not_found(lab_id)
-
-    return _pdf_download_response(
-        lab_id=lab_id,
-        kind="lab",
-        title=f"Lab Spec - {material.title}",
-        markdown_text=_lab_export_markdown(material),
-    )
+    return _export_material_pdf(_get_lab_or_404(request, lab_id), kind="lab")
 
 
 @router.get("/{lab_id}/export/quiz.pdf")
 async def export_quiz_pdf(lab_id: str, request: Request) -> Response:
-    store = request.app.state.store
-    material = store.get(lab_id)
-    if material is None:
-        raise _not_found(lab_id)
-
-    return _pdf_download_response(
-        lab_id=lab_id,
-        kind="quiz",
-        title=f"Quiz - {material.title}",
-        markdown_text=_quiz_export_markdown(material),
-    )
+    return _export_material_pdf(_get_lab_or_404(request, lab_id), kind="quiz")
 
 
 @router.get("/{lab_id}/export/rubric.pdf")
 async def export_rubric_pdf(lab_id: str, request: Request) -> Response:
-    store = request.app.state.store
-    material = store.get(lab_id)
-    if material is None:
-        raise _not_found(lab_id)
-
-    return _pdf_download_response(
-        lab_id=lab_id,
-        kind="rubric",
-        title=f"Rubric - {material.title}",
-        markdown_text=_rubric_export_markdown(material),
-    )
+    return _export_material_pdf(_get_lab_or_404(request, lab_id), kind="rubric")
 
 
 @router.post("/{lab_id}/upload-material", response_model=UploadAckResponse)
