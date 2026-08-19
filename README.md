@@ -7,11 +7,23 @@ Microservice in the AIEIC Lab Multi-Agent System. Generates lab materials (spec,
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # fill in Azure credentials
+cp .env.example .env   # defaults to memory storage + mock LLM for local integration
 python -m uvicorn main:app --host 127.0.0.1 --port 8003 --reload
 ```
 
-Set `LLM_BACKEND=mock` in `.env` to run without Azure credentials.
+Set `LLM_BACKEND=mock` in `.env` for zero-cost local wiring. For a real,
+low-cost API, use an OpenAI-compatible provider:
+
+```bash
+LLM_BACKEND=openai_compatible
+LLM_API_KEY=<your-provider-key>
+LLM_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-v4-flash
+```
+
+Leave `LLM_BASE_URL` empty and set `LLM_MODEL=gpt-5-nano` for direct OpenAI.
+Set `STORAGE_BACKEND=postgres` and `DATABASE_URL=...` only when you want drafts
+to persist in the shared AIEIC database.
 
 ## Endpoints
 
@@ -19,6 +31,7 @@ Set `LLM_BACKEND=mock` in `.env` to run without Azure credentials.
 |---|---|---|
 | GET  | `/health` | Health check |
 | POST | `/curriculum/generate` | Generate lab from objectives; preserves any uploaded RAG context |
+| POST | `/curriculum/generate-with-material` | One-shot form + optional PDF/TXT/MD upload → generate spec, quiz, rubric |
 | GET  | `/curriculum/{lab_id}` | Fetch current `LabMaterial` |
 | POST | `/curriculum/{lab_id}/upload-material` | Upload one or more PDFs → extract text as generation context |
 | POST | `/curriculum/{lab_id}/upload-instructions` | Store instructor instructions as generation context |
@@ -37,8 +50,9 @@ config.py                pydantic-settings (reads from .env)
 models/curriculum.py     LabMaterial, QuizQuestion, Rubric, upload/response models
 routers/curriculum.py    All endpoints
 services/
-  storage.py             MemoryStore (default) — swap to CosmosStore in v0.2
-  llm.py                 AzureLLMClient / MockLLMClient; build_llm_client() factory
+  database.py            SQLAlchemy tables for the shared Postgres runtime
+  storage.py             PostgresCurriculumStore + MemoryStore for tests
+  llm.py                 Azure / OpenAI-compatible / Mock LLM clients
   prompts.py             Prompt builders for 5 LLM tasks (return system, user tuples)
 graphs/generation.py     LangGraph pipeline: spec → quiz → rubric → self_review
 tests/                   Stage D (not yet implemented)

@@ -44,6 +44,10 @@ def _not_found(lab_id: str) -> HTTPException:
     )
 
 
+<<<<<<< HEAD
+=======
+# ── Upload extraction helper ──────────────────────────────────────────────────
+>>>>>>> 51c0ab7 (Add curriculum database integration)
 
 async def _extract_pdf_text(file: UploadFile) -> str:
     filename = file.filename or "uploaded.pdf"
@@ -80,6 +84,7 @@ async def _extract_pdf_text(file: UploadFile) -> str:
     return text
 
 
+<<<<<<< HEAD
 # ── PDF export helpers ────────────────────────────────────────────────────────
 
 MARKDOWN_EXTENSIONS = ["fenced_code", "tables", "sane_lists", "nl2br"]
@@ -196,10 +201,40 @@ def _markdown_to_pdf_bytes(title: str, markdown_text: str) -> bytes:
                 "error": {
                     "code": "PDF_EXPORT_FAILED",
                     "message": "Unable to render PDF from markdown content.",
+=======
+async def _extract_upload_text(file: UploadFile) -> str:
+    content_type = file.content_type or ""
+    filename = (file.filename or "").lower()
+    if filename.endswith(".pdf") or content_type == "application/pdf":
+        return await _extract_pdf_text(file)
+    if content_type.startswith("text/") or filename.endswith((".txt", ".md")):
+        data = await file.read()
+        text = data.decode("utf-8", errors="replace").strip()
+        if not text:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": {
+                        "code": "TEXT_NO_CONTENT",
+                        "message": "Uploaded text file is empty.",
+                        "agent": "curriculum-designer",
+                    }
+                },
+            )
+        return text
+    if content_type == "application/octet-stream":
+        raise HTTPException(
+            status_code=415,
+            detail={
+                "error": {
+                    "code": "UNSUPPORTED_MEDIA_TYPE",
+                    "message": "Unknown file type. Use a .pdf, .txt, or .md extension.",
+>>>>>>> 51c0ab7 (Add curriculum database integration)
                     "agent": "curriculum-designer",
                 }
             },
         )
+<<<<<<< HEAD
     return output.getvalue()
 
 
@@ -346,6 +381,20 @@ async def _extract_and_merge_pdf_text(files: list[UploadFile]) -> str:
     return "\n\n" + ("-" * 64 + "\n\n").join(sections)
 
 
+=======
+    raise HTTPException(
+        status_code=415,
+        detail={
+            "error": {
+                "code": "UNSUPPORTED_MEDIA_TYPE",
+                "message": "Only PDF, TXT, or Markdown files are accepted.",
+                "agent": "curriculum-designer",
+            }
+        },
+    )
+
+
+>>>>>>> 51c0ab7 (Add curriculum database integration)
 # ── Graph invocation helper ───────────────────────────────────────────────────
 
 async def _run_graph(
@@ -377,7 +426,10 @@ async def _run_graph(
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
-@router.post("/generate", response_model=LabMaterial)
+_INTERNAL_FIELDS = {"material_content", "agent_instructions", "feedback_history"}
+
+
+@router.post("/generate", response_model=LabMaterial, response_model_exclude=_INTERNAL_FIELDS)
 async def generate(req: GenerateRequest, request: Request) -> LabMaterial:
     """Generate a new lab from learning objectives.
 
@@ -421,10 +473,15 @@ async def generate(req: GenerateRequest, request: Request) -> LabMaterial:
         last_updated=now,
     )
     store.put(material)
+    store.record_event(
+        event_type="curriculum.generated",
+        material=material,
+        actor_id=req.instructor_id,
+    )
     return material
 
 
-@router.post("/generate-with-material", response_model=LabMaterial)
+@router.post("/generate-with-material", response_model=LabMaterial, response_model_exclude=_INTERNAL_FIELDS)
 async def generate_with_material(
     request: Request,
     lab_id: str = Form(...),
@@ -434,6 +491,7 @@ async def generate_with_material(
     estimated_duration_min: int = Form(90),
     instructor_id: str = Form(...),
     course_id: str = Form("csc580"),
+    agent_instructions: str = Form(""),
     file: UploadFile | None = File(None),
     files: list[UploadFile] | None = File(None),
 ) -> LabMaterial:
@@ -444,17 +502,26 @@ async def generate_with_material(
     """
     store = request.app.state.store
 
+<<<<<<< HEAD
     # Extract PDF text if one or more files were uploaded
     material_content: str | None = None
     uploaded_files = _collect_uploaded_files(file=file, files=files)
     if uploaded_files:
         material_content = await _extract_and_merge_pdf_text(uploaded_files)
+=======
+    # Extract context text if a real file was uploaded
+    material_content: str | None = None
+    if file and file.filename:
+        material_content = await _extract_upload_text(file)
+>>>>>>> 51c0ab7 (Add curriculum database integration)
 
     # Preserve existing context when no new PDF is provided
     existing = store.get(lab_id)
     if material_content is None and existing:
         material_content = existing.material_content
-    agent_instructions = existing.agent_instructions if existing else None
+    agent_instructions = agent_instructions.strip() or (
+        existing.agent_instructions if existing else None
+    )
 
     # Parse learning objectives — accept JSON list or newline-separated plain text
     try:
@@ -499,10 +566,26 @@ async def generate_with_material(
         last_updated=now,
     )
     store.put(material)
+    store.record_event(
+        event_type="curriculum.generated",
+        material=material,
+        actor_id=instructor_id,
+        payload={"with_uploaded_material": material_content is not None},
+    )
     return material
 
 
-@router.get("/{lab_id}", response_model=LabMaterial)
+@router.get("/{lab_id}/internal", response_model=LabMaterial)
+async def get_lab_internal(lab_id: str, request: Request) -> LabMaterial:
+    """Return the full draft, including internal context fields, for Orchestrator."""
+    store = request.app.state.store
+    material = store.get(lab_id)
+    if material is None:
+        raise _not_found(lab_id)
+    return material
+
+
+@router.get("/{lab_id}", response_model=LabMaterial, response_model_exclude=_INTERNAL_FIELDS)
 async def get_lab(lab_id: str, request: Request) -> LabMaterial:
     store = request.app.state.store
     material = store.get(lab_id)
@@ -544,6 +627,7 @@ async def upload_material(
     if material is None:
         raise _not_found(lab_id)
 
+<<<<<<< HEAD
     uploaded_files = _collect_uploaded_files(file=file, files=files)
     if not uploaded_files:
         raise HTTPException(
@@ -559,8 +643,17 @@ async def upload_material(
 
     merged_text = await _extract_and_merge_pdf_text(uploaded_files)
     material.material_content = merged_text
+=======
+    text = await _extract_upload_text(file)
+    material.material_content = text
+>>>>>>> 51c0ab7 (Add curriculum database integration)
     material.last_updated = datetime.now(timezone.utc)
     store.put(material)
+    store.record_event(
+        event_type="curriculum.material_uploaded",
+        material=material,
+        payload={"filename": file.filename, "chars_stored": len(text)},
+    )
 
     return UploadAckResponse(
         lab_id=lab_id,
@@ -585,6 +678,11 @@ async def upload_instructions(
     material.agent_instructions = body.instructions
     material.last_updated = datetime.now(timezone.utc)
     store.put(material)
+    store.record_event(
+        event_type="curriculum.instructions_updated",
+        material=material,
+        payload={"chars_stored": len(body.instructions)},
+    )
 
     return UploadAckResponse(
         lab_id=lab_id,
@@ -594,7 +692,7 @@ async def upload_instructions(
     )
 
 
-@router.post("/{lab_id}/approve", response_model=LabMaterial)
+@router.post("/{lab_id}/approve", response_model=LabMaterial, response_model_exclude=_INTERNAL_FIELDS)
 async def approve(lab_id: str, body: ApproveRequest, request: Request) -> LabMaterial:
     store = request.app.state.store
     material = store.get(lab_id)
@@ -606,10 +704,15 @@ async def approve(lab_id: str, body: ApproveRequest, request: Request) -> LabMat
     material.approval_notes = body.notes
     material.last_updated = datetime.now(timezone.utc)
     store.put(material)
+    store.record_event(
+        event_type="curriculum.approved",
+        material=material,
+        actor_id=body.approved_by,
+    )
     return material
 
 
-@router.post("/{lab_id}/request-changes", response_model=LabMaterial)
+@router.post("/{lab_id}/request-changes", response_model=LabMaterial, response_model_exclude=_INTERNAL_FIELDS)
 async def request_changes(
     lab_id: str, body: RequestChangesRequest, request: Request,
 ) -> LabMaterial:
@@ -662,6 +765,12 @@ async def request_changes(
         )
     )
     store.put(material)
+    store.record_event(
+        event_type="curriculum.updated",
+        material=material,
+        actor_id=body.requested_by,
+        payload={"feedback": body.feedback},
+    )
     return material
 
 

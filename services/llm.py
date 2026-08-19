@@ -12,7 +12,7 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from langchain_openai import AzureChatOpenAI
+from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from models.curriculum import QuizQuestion, Rubric, RubricCriterion, TypoIssue
@@ -155,6 +155,21 @@ class AzureLLMClient:
             raise LLMError(f"Check-typos JSON parse failed: {exc}\nRaw: {raw[:500]}") from exc
 
 
+class OpenAICompatibleLLMClient(AzureLLMClient):
+    """LLM client for OpenAI-compatible chat completion providers."""
+
+    def __init__(self, settings: "Settings") -> None:
+        if not settings.llm_api_key:
+            raise ValueError("LLM_API_KEY is required when LLM_BACKEND=openai_compatible")
+
+        self._llm = ChatOpenAI(
+            model=settings.llm_model,
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_base_url or None,
+            temperature=0.3,
+        )
+
+
 class MockLLMClient:
     """Stub client for local development without Azure credentials.
 
@@ -216,11 +231,25 @@ class MockLLMClient:
         return []   # mock: no issues
 
 
-def build_llm_client(settings: "Settings") -> AzureLLMClient | MockLLMClient:
+def build_llm_client(
+    settings: "Settings",
+) -> AzureLLMClient | OpenAICompatibleLLMClient | MockLLMClient:
     """Factory called from main.py lifespan."""
-    if settings.llm_backend.lower() == "mock":
+    backend = settings.llm_backend.lower()
+    if backend == "mock":
         logger.info("LLM backend: mock (stub data)")
         return MockLLMClient()
+    if backend in {"openai", "openai_compatible", "deepseek"}:
+        logger.info(
+            "LLM backend: OpenAI-compatible  base_url=%s  model=%s",
+            settings.llm_base_url or "https://api.openai.com/v1",
+            settings.llm_model,
+        )
+        return OpenAICompatibleLLMClient(settings)
+    if backend != "azure":
+        raise ValueError(
+            "LLM_BACKEND must be one of: mock, azure, openai_compatible"
+        )
     logger.info(
         "LLM backend: Azure OpenAI  endpoint=%s  deployment=%s  api_version=%s",
         settings.azure_openai_endpoint,

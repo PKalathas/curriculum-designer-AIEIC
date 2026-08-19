@@ -27,12 +27,24 @@ class Settings(BaseSettings):
     azure_openai_api_version: str = "2024-08-01-preview"
 
     # ── LLM backend ──────────────────────────────────────────────────────────
-    # "azure" = real Azure OpenAI calls; "mock" = stub data for dev/test
+    # "azure" = Azure OpenAI calls
+    # "openai_compatible" = OpenAI-compatible chat completions APIs
+    # "mock" = stub data for dev/test
     llm_backend: str = "azure"
 
+    # ── OpenAI-compatible APIs ────────────────────────────────────────────────
+    # Works with OpenAI, DeepSeek, OpenRouter, and similar providers.
+    # Examples:
+    #   OpenAI:  LLM_BASE_URL=, LLM_MODEL=gpt-5-nano
+    #   DeepSeek: LLM_BASE_URL=https://api.deepseek.com, LLM_MODEL=deepseek-v4-flash
+    llm_api_key: str = ""
+    llm_base_url: str = ""
+    llm_model: str = "gpt-5-nano"
+
     # ── Storage ───────────────────────────────────────────────────────────────
-    # v0.1: in-memory.  v0.2: swap for "cosmos" without touching the rest.
-    storage_backend: str = "memory"
+    # "postgres" is the integrated runtime backend. "memory" remains for tests.
+    storage_backend: str = "postgres"
+    database_url: str = ""
 
 
 settings = Settings()
